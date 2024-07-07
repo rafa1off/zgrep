@@ -1,23 +1,23 @@
 const std = @import("std");
-const lib = @import("root.zig");
+const zg = @import("lib.zig");
 
 pub fn main() !void {
-    const config = lib.readArgs() catch |err| switch (err) {
-        lib.Invoke.ArgAlloc => {
+    const config = zg.readArgs() catch |err| switch (err) {
+        zg.InvokeError.ArgAlloc => {
             std.debug.print("Error allocating args\n", .{});
             return;
         },
-        lib.Invoke.NotEnoughArgs => {
+        zg.InvokeError.NotEnoughArgs => {
             std.debug.print("Not enough args. Usage: zgrep <query> <path>\n", .{});
             return;
         },
-        lib.Invoke.TooManyArgs => {
+        zg.InvokeError.TooManyArgs => {
             std.debug.print("Too many args. Usage: zgrep <query> <path>\n", .{});
             return;
         },
     };
 
-    lib.search(config) catch |err| {
-        std.debug.print("error reading file: {any}\n", .{err});
+    config.search() catch |err| {
+        std.debug.print("Error reading file: {any}\n", .{err});
     };
 }
