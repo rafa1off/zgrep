@@ -1,4 +1,9 @@
 const std = @import("std");
+const mem = std.mem;
+const heap = std.heap;
+const io = std.io;
+const fs = std.fs;
+const process = std.process;
 
 pub const InvokeError = error{
     ArgAlloc,
@@ -19,11 +24,11 @@ pub const Config = struct {
     }
 
     pub fn run(self: Self) !void {
-        const stdout_file = std.io.getStdOut().writer();
-        var buf_writer = std.io.bufferedWriter(stdout_file);
+        const stdout_file = io.getStdOut().writer();
+        var buf_writer = io.bufferedWriter(stdout_file);
         const stdout = buf_writer.writer();
 
-        var dir = try std.fs.cwd().openDir(".", .{ .iterate = true });
+        var dir = try fs.cwd().openDir(".", .{ .iterate = true });
         defer dir.close();
         try iterateDir(dir, self.query, stdout);
 
@@ -32,10 +37,10 @@ pub const Config = struct {
 };
 
 pub fn readArgs() InvokeError!Config {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    var it = std.process.argsWithAllocator(alloc) catch return InvokeError.ArgAlloc;
+    var it = process.argsWithAllocator(alloc) catch return InvokeError.ArgAlloc;
     defer it.deinit();
 
     _ = it.next();
@@ -48,31 +53,36 @@ pub fn readArgs() InvokeError!Config {
     return Config.init(query);
 }
 
-fn search(file: std.fs.File, query: []const u8, name: []const u8, stdout: anytype) !void {
-    var buf_reader = std.io.bufferedReader(file.reader());
+fn search(file: fs.File, query: []const u8, name: []const u8, stdout: anytype) !void {
+    var buf_reader = io.bufferedReader(file.reader());
     var reader = buf_reader.reader();
 
-    var buf: [1024]u8 = undefined;
+    var buf: [1024 * 1024]u8 = undefined;
     while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-        if (std.mem.count(u8, line, query) > 0) {
+        if (mem.count(u8, line, query) > 0) {
             try stdout.print("{s}\n", .{name});
             break;
         }
     }
 }
 
-pub fn iterateDir(dir: std.fs.Dir, query: []const u8, writer: anytype) !void {
+pub fn iterateDir(dir: fs.Dir, query: []const u8, writer: anytype) !void {
     var it = dir.iterate();
 
     while (try it.next()) |entry| {
         switch (entry.kind) {
-            std.fs.File.Kind.file => {
-                const file = try std.fs.cwd().openFile(entry.name, .{});
+            fs.File.Kind.file => {
+                const file = try dir.openFile(entry.name, .{});
                 try search(file, query, entry.name, writer);
                 file.close();
             },
-            std.fs.File.Kind.directory => {
-                // std.debug.print("{s}\n", .{entry.name});
+            fs.File.Kind.directory => {
+                if (mem.count(u8, entry.name, ".git") > 0 or
+                    mem.count(u8, entry.name, "cache") > 0)
+                {
+                    continue;
+                }
+
                 var sub_dir = try dir.openDir(entry.name, .{ .iterate = true });
                 try iterateDir(sub_dir, query, writer);
                 sub_dir.close();
