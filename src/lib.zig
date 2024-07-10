@@ -58,8 +58,11 @@ fn search(file: fs.File, query: []const u8, name: []const u8, stdout: anytype) !
     var reader = buf_reader.reader();
 
     var buf: [1024 * 1024]u8 = undefined;
-    while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-        if (mem.count(u8, line, query) > 0) {
+    var count: usize = 0;
+
+    while (reader.skipBytes(count, .{}) != error.EndOfStream) {
+        count += try reader.readAtLeast(&buf, buf.len);
+        if (mem.count(u8, &buf, query) > 0) {
             try stdout.print("{s}\n", .{name});
             break;
         }
@@ -72,18 +75,26 @@ pub fn iterateDir(dir: fs.Dir, query: []const u8, writer: anytype) !void {
     while (try it.next()) |entry| {
         switch (entry.kind) {
             fs.File.Kind.file => {
-                const file = try dir.openFile(entry.name, .{});
+                const file = dir.openFile(entry.name, .{}) catch |err| switch (err) {
+                    error.AccessDenied, error.DeviceBusy => continue,
+                    else => return err,
+                };
                 try search(file, query, entry.name, writer);
                 file.close();
             },
             fs.File.Kind.directory => {
                 if (mem.count(u8, entry.name, ".git") > 0 or
+                    mem.count(u8, entry.name, "bin") > 0 or
+                    mem.count(u8, entry.name, ".cache") > 0 or
                     mem.count(u8, entry.name, "cache") > 0)
                 {
                     continue;
                 }
 
-                var sub_dir = try dir.openDir(entry.name, .{ .iterate = true });
+                var sub_dir = dir.openDir(entry.name, .{ .iterate = true }) catch |err| switch (err) {
+                    error.AccessDenied, error.DeviceBusy => continue,
+                    else => return err,
+                };
                 try iterateDir(sub_dir, query, writer);
                 sub_dir.close();
             },
