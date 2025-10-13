@@ -14,12 +14,14 @@ pub const InvokeError = error{
 
 pub const Config = struct {
     query: []const u8,
+    alloc: mem.Allocator,
 
     const Self = @This();
 
-    fn init(query: []const u8) Self {
+    fn init(query: []const u8, alloc: mem.Allocator) Self {
         return .{
             .query = query,
+            .alloc = alloc,
         };
     }
 
@@ -28,9 +30,8 @@ pub const Config = struct {
         var buf_writer = io.bufferedWriter(stdout_file);
         const stdout = buf_writer.writer();
 
-        var dir = try fs.cwd().openDir(".", .{ .iterate = true });
-        defer dir.close();
-        try iterateDir(dir, self.query, stdout);
+        const dir = fs.cwd();
+        try iterateDir(dir, ".", self, stdout);
 
         try buf_writer.flush();
     }
@@ -47,10 +48,9 @@ pub fn readArgs() InvokeError!Config {
 
     const query = it.next() orelse return InvokeError.NotEnoughArgs;
     if (it.next() != null) return InvokeError.TooManyArgs;
-
     if (query.len == 0) return InvokeError.InvalidArg;
 
-    return Config.init(query);
+    return Config.init(query, alloc);
 }
 
 fn search(file: fs.File, query: []const u8, name: []const u8, stdout: anytype) !void {
@@ -69,17 +69,19 @@ fn search(file: fs.File, query: []const u8, name: []const u8, stdout: anytype) !
     }
 }
 
-pub fn iterateDir(dir: fs.Dir, query: []const u8, writer: anytype) !void {
-    var it = dir.iterate();
+pub fn iterateDir(dir: fs.Dir, path: []const u8, config: Config, writer: anytype) !void {
+    var open_dir = try dir.openDir(path, .{ .iterate = true });
+
+    var it = open_dir.iterate();
 
     while (try it.next()) |entry| {
         switch (entry.kind) {
             fs.File.Kind.file => {
-                const file = dir.openFile(entry.name, .{}) catch |err| switch (err) {
+                const file = open_dir.openFile(entry.name, .{}) catch |err| switch (err) {
                     error.AccessDenied, error.DeviceBusy => continue,
                     else => return err,
                 };
-                try search(file, query, entry.name, writer);
+                try search(file, config.query, entry.name, writer);
                 file.close();
             },
             fs.File.Kind.directory => {
@@ -91,12 +93,8 @@ pub fn iterateDir(dir: fs.Dir, query: []const u8, writer: anytype) !void {
                     continue;
                 }
 
-                var sub_dir = dir.openDir(entry.name, .{ .iterate = true }) catch |err| switch (err) {
-                    error.AccessDenied, error.DeviceBusy => continue,
-                    else => return err,
-                };
-                try iterateDir(sub_dir, query, writer);
-                sub_dir.close();
+                const thread = try std.Thread.spawn(.{}, iterateDir, .{ open_dir, entry.name, config, writer });
+                defer thread.join();
             },
             else => continue,
         }
